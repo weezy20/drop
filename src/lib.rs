@@ -1,10 +1,10 @@
 use axum::{
     Router,
+    body::Body,
     extract::{Multipart, Path, State},
     http::{StatusCode, header},
     response::{IntoResponse, Json},
     routing::{get, post},
-    body::Body,
 };
 use color_eyre::eyre::Result;
 use sanitize_filename::sanitize;
@@ -34,7 +34,7 @@ pub type RateLimitStorage = Arc<Mutex<HashMap<String, (Instant, u32)>>>;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub min_file_size_limit: usize,
-    pub max_file_size_limit: usize, 
+    pub max_file_size_limit: usize,
     pub max_total_size_per_request: usize,
     pub stream_threshold: usize,
     pub temp_directory: PathBuf,
@@ -48,10 +48,10 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            min_file_size_limit: 50 * 1024 * 1024, // 50MB
-            max_file_size_limit: 5 * 1024 * 1024 * 1024, // 5GB
+            min_file_size_limit: 50 * 1024 * 1024,               // 50MB
+            max_file_size_limit: 5 * 1024 * 1024 * 1024,         // 5GB
             max_total_size_per_request: 10 * 1024 * 1024 * 1024, // 10GB
-            stream_threshold: 50 * 1024 * 1024, // 50MB
+            stream_threshold: 50 * 1024 * 1024,                  // 50MB
             temp_directory: PathBuf::from("./temp"),
             bind_address: "0.0.0.0:3000".to_string(),
             memory_pool_ratio: 0.5,
@@ -65,39 +65,39 @@ impl Default for Config {
 impl Config {
     pub fn from_env() -> Self {
         let mut config = Self::default();
-        
+
         if let Ok(val) = env::var("DROP_MIN_FILE_SIZE_MB") {
             if let Ok(size) = val.parse::<usize>() {
                 config.min_file_size_limit = size * 1024 * 1024;
             }
         }
-        
+
         if let Ok(val) = env::var("DROP_MAX_FILE_SIZE_GB") {
             if let Ok(size) = val.parse::<usize>() {
                 config.max_file_size_limit = size * 1024 * 1024 * 1024;
             }
         }
-        
+
         if let Ok(val) = env::var("DROP_MAX_TOTAL_SIZE_GB") {
             if let Ok(size) = val.parse::<usize>() {
                 config.max_total_size_per_request = size * 1024 * 1024 * 1024;
             }
         }
-        
+
         if let Ok(val) = env::var("DROP_STREAM_THRESHOLD_MB") {
             if let Ok(size) = val.parse::<usize>() {
                 config.stream_threshold = size * 1024 * 1024;
             }
         }
-        
+
         if let Ok(val) = env::var("DROP_TEMP_DIR") {
             config.temp_directory = PathBuf::from(val);
         }
-        
+
         if let Ok(val) = env::var("DROP_BIND_ADDRESS") {
             config.bind_address = val;
         }
-        
+
         if let Ok(val) = env::var("DROP_MEMORY_POOL_RATIO") {
             if let Ok(ratio) = val.parse::<f64>() {
                 if ratio > 0.0 && ratio <= 1.0 {
@@ -105,13 +105,13 @@ impl Config {
                 }
             }
         }
-        
+
         if let Ok(val) = env::var("DROP_RATE_LIMIT_RPM") {
             if let Ok(rpm) = val.parse::<u32>() {
                 config.rate_limit_requests_per_minute = rpm;
             }
         }
-        
+
         config
     }
 }
@@ -224,7 +224,7 @@ fn deallocate_memory(size: usize) {
 
 fn generate_short_code() -> String {
     use std::hash::{Hash, Hasher};
-    
+
     // Use current timestamp + random UUID to generate unique short code
     let uuid = Uuid::new_v4();
     let timestamp = std::time::SystemTime::now()
@@ -234,36 +234,33 @@ fn generate_short_code() -> String {
             std::time::Duration::from_nanos(0)
         })
         .as_nanos();
-    
+
     // Use XXH3 for superior speed and distribution properties
     let mut hasher = Xxh3::new();
     uuid.hash(&mut hasher);
     timestamp.hash(&mut hasher);
-    
+
     // Add some extra entropy from process-specific data
     std::process::id().hash(&mut hasher);
     std::thread::current().id().hash(&mut hasher);
-    
+
     let hash = hasher.finish();
-    
+
     // Simple base36 encoding using alphanumeric characters
     let chars = "0123456789abcdefghijklmnopqrstuvwxyz";
     let mut result = String::new();
     let mut n = hash;
-    
+
     for _ in 0..8 {
         let idx = (n % 36) as usize;
         result.push(chars.chars().nth(idx).unwrap()); // This unwrap is safe - idx is always 0-35
         n /= 36;
     }
-    
+
     result
 }
 
-fn resolve_id_or_short_code(
-    input: &str,
-    short_url_storage: &ShortUrlStorage,
-) -> Option<String> {
+fn resolve_id_or_short_code(input: &str, short_url_storage: &ShortUrlStorage) -> Option<String> {
     // First check if it's a short code
     if let Ok(storage_guard) = short_url_storage.lock() {
         if let Some(full_id) = storage_guard.get(input) {
@@ -272,7 +269,7 @@ fn resolve_id_or_short_code(
     } else {
         error!("Failed to acquire lock on short URL storage");
     }
-    
+
     // If not found as short code, check if it looks like a UUID
     if input.len() == 36 && input.chars().nth(8) == Some('-') {
         Some(input.to_string())
@@ -295,57 +292,61 @@ fn format_size(size: usize) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB"];
     let mut size = size as f64;
     let mut unit_index = 0;
-    
+
     while size >= 1024.0 && unit_index < UNITS.len() - 1 {
         size /= 1024.0;
         unit_index += 1;
     }
-    
+
     format!("{:.2} {}", size, UNITS[unit_index])
 }
 
 // Security: Sanitize filename to prevent path traversal attacks
 fn sanitize_filename(filename: &str) -> String {
     let sanitized = sanitize(filename);
-    
+
     // Additional security checks
     if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
         return "unknown_file".to_string();
     }
-    
+
     // Limit filename length
     if sanitized.len() > 200 {
-        return format!("{}...{}", &sanitized[..100], &sanitized[sanitized.len()-50..]);
+        return format!(
+            "{}...{}",
+            &sanitized[..100],
+            &sanitized[sanitized.len() - 50..]
+        );
     }
-    
+
     sanitized
 }
 
 // Rate limiting check
 fn check_rate_limit(
-    client_ip: &str, 
-    rate_storage: &RateLimitStorage, 
-    config: &Config
+    client_ip: &str,
+    rate_storage: &RateLimitStorage,
+    config: &Config,
 ) -> Result<(), StatusCode> {
     let now = Instant::now();
     let window_duration = Duration::from_secs(config.rate_limit_window_seconds);
-    
+
     if let Ok(mut storage) = rate_storage.lock() {
         let entry = storage.entry(client_ip.to_string()).or_insert((now, 0));
-        
+
         // Reset counter if window has passed
         if now.duration_since(entry.0) > window_duration {
             entry.0 = now;
             entry.1 = 0;
         }
-        
+
         entry.1 += 1;
-        
+
         if entry.1 > config.rate_limit_requests_per_minute {
             warn!("Rate limit exceeded for IP: {}", client_ip);
             return Err(StatusCode::TOO_MANY_REQUESTS);
         }
-        
+
         Ok(())
     } else {
         error!("Failed to acquire rate limit storage lock");
@@ -372,16 +373,16 @@ async fn stream_field_to_disk(
         StatusCode::BAD_REQUEST
     })? {
         total_size += chunk.len();
-        
+
         // Check size limit during streaming
         if total_size > max_size {
             // Clean up partial file
             let _ = tokio::fs::remove_file(file_path).await;
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
-        
+
         buffer.extend_from_slice(&chunk);
-        
+
         // Write in larger chunks for better performance
         if buffer.len() >= 8192 {
             file.write_all(&buffer).await.map_err(|e| {
@@ -391,7 +392,7 @@ async fn stream_field_to_disk(
             buffer.clear();
         }
     }
-    
+
     // Write remaining data
     if !buffer.is_empty() {
         file.write_all(&buffer).await.map_err(|e| {
@@ -399,7 +400,7 @@ async fn stream_field_to_disk(
             StatusCode::INTERNAL_SERVER_ERROR
         })?;
     }
-    
+
     file.flush().await.map_err(|e| {
         error!("Failed to flush file to disk: {:?}", e);
         StatusCode::INTERNAL_SERVER_ERROR
@@ -421,7 +422,7 @@ pub async fn upload_file(
 
     // Increment active connections
     ACTIVE_CONNECTIONS.fetch_add(1, Ordering::Relaxed);
-    
+
     let mut total_size = 0usize;
 
     // Process the multipart form data
@@ -432,7 +433,10 @@ pub async fn upload_file(
     })? {
         let raw_filename = field.file_name().unwrap_or("unknown").to_string();
         let filename = sanitize_filename(&raw_filename);
-        info!("Processing file: {} (sanitized from: {})", filename, raw_filename);
+        info!(
+            "Processing file: {} (sanitized from: {})",
+            filename, raw_filename
+        );
 
         let content_type = field
             .content_type()
@@ -455,15 +459,19 @@ pub async fn upload_file(
 
         // Create temp directory if it doesn't exist
         ensure_temp_directory(&app_state.config.temp_directory).await?;
-        
+
         // Always stream to disk first for large file support
         let file_path = app_state.config.temp_directory.join(format!("file_{}", id));
-        let file_size = stream_field_to_disk(field, &file_path, app_state.config.max_file_size_limit).await?;
+        let file_size =
+            stream_field_to_disk(field, &file_path, app_state.config.max_file_size_limit).await?;
 
         // Check total request size limit
         total_size += file_size;
         if total_size > app_state.config.max_total_size_per_request {
-            error!("Total request size exceeds maximum limit of {}", format_size(app_state.config.max_total_size_per_request));
+            error!(
+                "Total request size exceeds maximum limit of {}",
+                format_size(app_state.config.max_total_size_per_request)
+            );
             // Clean up the file we just wrote
             let _ = tokio::fs::remove_file(&file_path).await;
             ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
@@ -478,44 +486,53 @@ pub async fn upload_file(
         );
 
         // Decide whether to keep in memory or on disk based on size and memory availability
-        let file_data = if file_size < app_state.config.stream_threshold && try_allocate_memory(file_size) {
-            info!("Moving file '{}' to memory pool (size: {})", filename, format_size(file_size));
-            
-            // Read file into memory and delete from disk
-            match tokio::fs::read(&file_path).await {
-                Ok(data) => {
-                    // Delete the temporary file since we have it in memory
-                    if let Err(e) = tokio::fs::remove_file(&file_path).await {
-                        warn!("Failed to remove temporary file: {:?}", e);
+        let file_data =
+            if file_size < app_state.config.stream_threshold && try_allocate_memory(file_size) {
+                info!(
+                    "Moving file '{}' to memory pool (size: {})",
+                    filename,
+                    format_size(file_size)
+                );
+
+                // Read file into memory and delete from disk
+                match tokio::fs::read(&file_path).await {
+                    Ok(data) => {
+                        // Delete the temporary file since we have it in memory
+                        if let Err(e) = tokio::fs::remove_file(&file_path).await {
+                            warn!("Failed to remove temporary file: {:?}", e);
+                        }
+
+                        FileData {
+                            filename: filename.clone(),
+                            content_type,
+                            data: Some(data),
+                            file_path: None,
+                        }
                     }
-                    
-                    FileData {
-                        filename: filename.clone(),
-                        content_type,
-                        data: Some(data),
-                        file_path: None,
+                    Err(e) => {
+                        error!("Failed to read file into memory: {:?}", e);
+                        deallocate_memory(file_size);
+                        FileData {
+                            filename: filename.clone(),
+                            content_type,
+                            data: None,
+                            file_path: Some(file_path),
+                        }
                     }
                 }
-                Err(e) => {
-                    error!("Failed to read file into memory: {:?}", e);
-                    deallocate_memory(file_size);
-                    FileData {
-                        filename: filename.clone(),
-                        content_type,
-                        data: None,
-                        file_path: Some(file_path),
-                    }
+            } else {
+                info!(
+                    "Keeping file '{}' on disk (size: {})",
+                    filename,
+                    format_size(file_size)
+                );
+                FileData {
+                    filename: filename.clone(),
+                    content_type,
+                    data: None,
+                    file_path: Some(file_path),
                 }
-            }
-        } else {
-            info!("Keeping file '{}' on disk (size: {})", filename, format_size(file_size));
-            FileData {
-                filename: filename.clone(),
-                content_type,
-                data: None,
-                file_path: Some(file_path),
-            }
-        };
+            };
 
         if let Ok(mut storage_guard) = app_state.file_storage.lock() {
             storage_guard.insert(id.clone(), file_data);
@@ -530,9 +547,12 @@ pub async fn upload_file(
         ACTIVE_CONNECTIONS.fetch_sub(1, Ordering::Relaxed);
 
         // Return the ID and short URL
-        return Ok(Json(UploadResponse { 
+        return Ok(Json(UploadResponse {
             id: id.clone(),
-            short_url: format!("http://{}/drop/{}", app_state.config.bind_address, short_code),
+            short_url: format!(
+                "http://{}/drop/{}",
+                app_state.config.bind_address, short_code
+            ),
             full_url: format!("http://{}/drop/{}", app_state.config.bind_address, id),
         }));
     }
@@ -551,8 +571,8 @@ pub async fn download_file(
     info!("Attempting to download file with ID: {}", id);
 
     // Resolve short code to full UUID if needed
-    let resolved_id = resolve_id_or_short_code(&id, &app_state.short_url_storage)
-        .unwrap_or_else(|| id.clone());
+    let resolved_id =
+        resolve_id_or_short_code(&id, &app_state.short_url_storage).unwrap_or_else(|| id.clone());
 
     info!("Resolved ID: {}", resolved_id);
 
@@ -560,7 +580,10 @@ pub async fn download_file(
         match app_state.file_storage.lock() {
             Ok(storage_guard) => storage_guard.get(&resolved_id).cloned(),
             Err(e) => {
-                error!("Failed to acquire lock on file storage during download: {}", e);
+                error!(
+                    "Failed to acquire lock on file storage during download: {}",
+                    e
+                );
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
@@ -596,11 +619,8 @@ pub async fn download_file(
                     Ok(file) => {
                         let stream = ReaderStream::new(file);
                         let body = Body::from_stream(stream);
-                        
-                        info!(
-                            "Streaming file '{}' from disk",
-                            file_data.filename
-                        );
+
+                        info!("Streaming file '{}' from disk", file_data.filename);
                         (headers, body).into_response()
                     }
                     Err(e) => {
