@@ -31,6 +31,8 @@ tower = { version = "0.5", features = ["limit", "buffer", "timeout"] }
 tower-http = { version = "0.6", features = ["limit", "cors"] }
 regex = "1.0"
 sanitize-filename = "0.5"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

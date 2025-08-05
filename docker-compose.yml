@@ -1,0 +1,66 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: drop_postgres
+    environment:
+      POSTGRES_DB: drop
+      POSTGRES_USER: drop_user
+      POSTGRES_PASSWORD: drop_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drop_user -d drop"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - drop_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: drop_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - drop_network
+
+  app:
+    build: .
+    container_name: drop_app
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://drop_user:drop_password@postgres:5432/drop
+      REDIS_URL: redis://redis:6379
+      DROP_BIND_ADDRESS: 0.0.0.0:3000
+      DROP_TEMP_DIR: /tmp/drop
+      RUST_LOG: info
+    volumes:
+      - ./temp:/tmp/drop
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - drop_network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  drop_network:
+    driver: bridge

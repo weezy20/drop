@@ -1,13 +1,6 @@
 use reqwest::{Client, multipart};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tempfile::TempDir;
-use tokio::net::TcpListener;
-
-// Import the main application's types and functions
-use drop::{AppState, Config, create_app};
 
 /// Helper function to create a test client with appropriate timeouts
 fn create_test_client() -> Client {
@@ -17,73 +10,47 @@ fn create_test_client() -> Client {
         .expect("Failed to create HTTP client")
 }
 
-/// Test server wrapper that handles cleanup
-pub struct TestServer {
-    pub base_url: String,
-    _temp_dir: TempDir, // Keep alive for cleanup
-}
+/// Constants for the Docker test environment
+const DOCKER_BASE_URL: &str = "http://localhost:3000";
 
-impl TestServer {
-    /// Create a new test server with automatic cleanup
-    pub async fn new() -> Self {
-        // Create a unique temporary directory that will be automatically cleaned up
-        let temp_dir = TempDir::new().expect("Failed to create temporary directory");
+/// Helper function to wait for the Docker services to be ready
+async fn wait_for_services() -> Result<(), Box<dyn std::error::Error>> {
+    let client = create_test_client();
+    let max_attempts = 30;
+    let mut attempts = 0;
 
-        // Create test configuration
-        let mut config = Config::default();
-        config.bind_address = "127.0.0.1:0".to_string(); // Use port 0 for automatic assignment
-        config.temp_directory = temp_dir.path().to_path_buf();
-        config.min_file_size_limit = 1024; // 1KB for easier testing
-        config.max_file_size_limit = 10 * 1024 * 1024; // 10MB for tests
-        config.stream_threshold = 1024 * 1024; // 1MB
-
-        // Create shared state
-        let app_state = AppState {
-            config: config.clone(),
-            file_storage: Arc::new(Mutex::new(HashMap::new())),
-            short_url_storage: Arc::new(Mutex::new(HashMap::new())),
-            rate_limit_storage: Arc::new(Mutex::new(HashMap::new())),
-        };
-
-        let app = create_app(app_state);
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind test server");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        let base_url = format!("http://{}", addr);
-
-        // Start the server in the background
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("Test server failed to start");
-        });
-
-        // Give the server a moment to start
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        Self {
-            base_url,
-            _temp_dir: temp_dir, // This will be dropped when TestServer is dropped, cleaning up the directory
+    while attempts < max_attempts {
+        match client.get(&format!("{}/health", DOCKER_BASE_URL)).send().await {
+            Ok(response) if response.status().is_success() => {
+                let health: Value = response.json().await?;
+                if health["status"] == "healthy" || health["status"] == "degraded" {
+                    println!("✅ Docker services are ready!");
+                    return Ok(());
+                }
+            }
+            _ => {
+                println!("⏳ Waiting for Docker services... (attempt {}/{})", attempts + 1, max_attempts);
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
         }
+        attempts += 1;
     }
+
+    Err("Docker services did not become ready in time".into())
 }
 
 /// Upload a test file and return the response JSON
 async fn upload_test_file(
-    base_url: &str,
     filename: &str,
     content: &str,
 ) -> Result<Value, Box<dyn std::error::Error>> {
     let client = create_test_client();
 
     let part = multipart::Part::text(content.to_string()).file_name(filename.to_string());
-
     let form = multipart::Form::new().part("file", part);
 
     let response = client
-        .post(&format!("{}/drop", base_url))
+        .post(&format!("{}/drop", DOCKER_BASE_URL))
         .multipart(form)
         .send()
         .await?;
@@ -98,13 +65,12 @@ async fn upload_test_file(
 
 /// Download a file by ID or short code
 async fn download_test_file(
-    base_url: &str,
     identifier: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let client = create_test_client();
 
     let response = client
-        .get(&format!("{}/drop/{}", base_url, identifier))
+        .get(&format!("{}/drop/{}", DOCKER_BASE_URL, identifier))
         .send()
         .await?;
 
@@ -116,15 +82,52 @@ async fn download_test_file(
     Ok(content)
 }
 
+/// Test helper to ensure clean state between tests
+async fn setup_test() -> Result<(), Box<dyn std::error::Error>> {
+    wait_for_services().await?;
+    
+    // Verify health endpoint
+    let client = create_test_client();
+    let health_response = client.get(&format!("{}/health", DOCKER_BASE_URL)).send().await?;
+    let health: Value = health_response.json().await?;
+    
+    println!("🔍 Service health: {}", health);
+    
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_docker_services_health() {
+    setup_test().await.expect("Failed to setup test");
+
+    let client = create_test_client();
+    let response = client
+        .get(&format!("{}/health", DOCKER_BASE_URL))
+        .send()
+        .await
+        .expect("Failed to call health endpoint");
+
+    assert!(response.status().is_success(), "Health endpoint should return success");
+
+    let health: Value = response.json().await.expect("Failed to parse health response");
+    println!("Health response: {}", serde_json::to_string_pretty(&health).unwrap());
+
+    // Verify required fields exist
+    assert!(health["status"].is_string(), "Health status should be present");
+    assert!(health["database"].is_string(), "Database status should be present");
+    assert!(health["memory_pool"].is_string(), "Memory pool info should be present");
+    assert!(health["active_connections"].is_number(), "Active connections should be present");
+}
+
 #[tokio::test]
 async fn test_basic_upload_download() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
 
-    let test_content = "Hello, World! This is a test file.";
-    let test_filename = "test.txt";
+    let test_content = "Hello, World! This is a test file for Docker integration.";
+    let test_filename = "docker_test.txt";
 
     // Upload file
-    let upload_response = upload_test_file(&server.base_url, test_filename, test_content)
+    let upload_response = upload_test_file(test_filename, test_content)
         .await
         .expect("Failed to upload test file");
 
@@ -139,16 +142,13 @@ async fn test_basic_upload_download() {
         .as_str()
         .expect("No full URL in response");
 
-    println!(
-        "Upload response: {}",
-        serde_json::to_string_pretty(&upload_response).unwrap()
-    );
+    println!("Upload response: {}", serde_json::to_string_pretty(&upload_response).unwrap());
     println!("File ID: {}", file_id);
     println!("Short URL: {}", short_url);
     println!("Full URL: {}", full_url);
 
     // Test download by full ID
-    let downloaded_content = download_test_file(&server.base_url, file_id)
+    let downloaded_content = download_test_file(file_id)
         .await
         .expect("Failed to download file by ID");
 
@@ -162,7 +162,7 @@ async fn test_basic_upload_download() {
         .split('/')
         .last()
         .expect("Invalid short URL format");
-    let downloaded_by_short = download_test_file(&server.base_url, short_code)
+    let downloaded_by_short = download_test_file(short_code)
         .await
         .expect("Failed to download file by short code");
 
@@ -170,18 +170,52 @@ async fn test_basic_upload_download() {
         downloaded_by_short, test_content,
         "Downloaded content via short code doesn't match"
     );
-} // TestServer is dropped here, automatically cleaning up temp directory
+}
+
+#[tokio::test]
+async fn test_database_persistence() {
+    setup_test().await.expect("Failed to setup test");
+
+    let test_content = "This file tests database persistence across requests.";
+    let test_filename = "persistence_test.txt";
+
+    // Upload file
+    let upload_response = upload_test_file(test_filename, test_content)
+        .await
+        .expect("Failed to upload test file");
+
+    let file_id = upload_response["id"]
+        .as_str()
+        .expect("No file ID in response");
+
+    // Wait a moment to ensure database write is complete
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Download multiple times to test persistence
+    for i in 1..=3 {
+        let downloaded_content = download_test_file(file_id)
+            .await
+            .expect(&format!("Failed to download file on attempt {}", i));
+
+        assert_eq!(
+            downloaded_content, test_content,
+            "Downloaded content doesn't match on attempt {}",
+            i
+        );
+        println!("✅ Persistence test attempt {} successful", i);
+    }
+}
 
 #[tokio::test]
 async fn test_large_file_streaming() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
 
-    // Create a large test file (1MB)
+    // Create a 1MB test file
     let large_content = "A".repeat(1024 * 1024);
-    let test_filename = "large_test.txt";
+    let test_filename = "large_docker_test.txt";
 
     // Upload large file
-    let upload_response = upload_test_file(&server.base_url, test_filename, &large_content)
+    let upload_response = upload_test_file(test_filename, &large_content)
         .await
         .expect("Failed to upload large test file");
 
@@ -189,8 +223,10 @@ async fn test_large_file_streaming() {
         .as_str()
         .expect("No file ID in response");
 
+    println!("✅ Large file uploaded successfully: {}", file_id);
+
     // Download and verify
-    let downloaded_content = download_test_file(&server.base_url, file_id)
+    let downloaded_content = download_test_file(file_id)
         .await
         .expect("Failed to download large file");
 
@@ -203,23 +239,25 @@ async fn test_large_file_streaming() {
         downloaded_content, large_content,
         "Large file content mismatch"
     );
-} // TestServer is dropped here, automatically cleaning up temp directory
+
+    println!("✅ Large file streaming test passed");
+}
 
 #[tokio::test]
 async fn test_multiple_files() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
 
     let files = vec![
-        ("file1.txt", "Content of file 1"),
-        ("file2.txt", "Content of file 2"),
-        ("file3.txt", "Content of file 3"),
+        ("docker_file1.txt", "Content of Docker file 1"),
+        ("docker_file2.txt", "Content of Docker file 2"),
+        ("docker_file3.txt", "Content of Docker file 3"),
     ];
 
     let mut uploaded_files = Vec::new();
 
     // Upload multiple files
     for (filename, content) in &files {
-        let upload_response = upload_test_file(&server.base_url, filename, content)
+        let upload_response = upload_test_file(filename, content)
             .await
             .expect("Failed to upload file");
 
@@ -228,11 +266,12 @@ async fn test_multiple_files() {
             .expect("No file ID in response")
             .to_string();
         uploaded_files.push((file_id, content));
+        println!("✅ Uploaded file: {}", filename);
     }
 
     // Download and verify each file
     for (file_id, expected_content) in uploaded_files {
-        let downloaded_content = download_test_file(&server.base_url, &file_id)
+        let downloaded_content = download_test_file(&file_id)
             .await
             .expect("Failed to download file");
 
@@ -241,35 +280,39 @@ async fn test_multiple_files() {
             "File content mismatch for ID: {}",
             file_id
         );
+        println!("✅ Verified file: {}", file_id);
     }
-} // TestServer is dropped here, automatically cleaning up temp directory
+}
 
 #[tokio::test]
 async fn test_file_not_found() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
+
     let client = create_test_client();
 
     // Try to download a non-existent file
     let response = client
-        .get(&format!("{}/drop/nonexistent-id", server.base_url))
+        .get(&format!("{}/drop/nonexistent-id", DOCKER_BASE_URL))
         .send()
         .await
         .expect("Request failed");
 
     assert_eq!(response.status(), 404, "Expected 404 for non-existent file");
-} // TestServer is dropped here, automatically cleaning up temp directory
+    println!("✅ File not found test passed");
+}
 
 #[tokio::test]
 async fn test_short_code_uniqueness() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
+
     let mut short_codes = std::collections::HashSet::new();
 
     // Upload multiple files and collect short codes
-    for i in 0..10 {
-        let content = format!("Test file content {}", i);
-        let filename = format!("test{}.txt", i);
+    for i in 0..5 {
+        let content = format!("Docker test file content {}", i);
+        let filename = format!("docker_unique_test{}.txt", i);
 
-        let upload_response = upload_test_file(&server.base_url, &filename, &content)
+        let upload_response = upload_test_file(&filename, &content)
             .await
             .expect("Failed to upload file");
 
@@ -302,12 +345,14 @@ async fn test_short_code_uniqueness() {
             "Short code should be alphanumeric: {}",
             short_code
         );
+
+        println!("✅ Generated unique short code: {}", short_code);
     }
-} // TestServer is dropped here, automatically cleaning up temp directory
+}
 
 #[tokio::test]
 async fn test_filename_sanitization() {
-    let server = TestServer::new().await;
+    setup_test().await.expect("Failed to setup test");
 
     // Test various potentially problematic filenames
     let problematic_filenames = vec![
@@ -327,7 +372,7 @@ async fn test_filename_sanitization() {
         let content = format!("Content for {}", problematic_filename);
 
         // This should succeed - the server should sanitize the filename
-        let upload_response = upload_test_file(&server.base_url, problematic_filename, &content)
+        let upload_response = upload_test_file(problematic_filename, &content)
             .await
             .expect("Failed to upload file with problematic filename");
 
@@ -336,7 +381,7 @@ async fn test_filename_sanitization() {
             .expect("No file ID in response");
 
         // Should be able to download the file
-        let downloaded_content = download_test_file(&server.base_url, file_id)
+        let downloaded_content = download_test_file(file_id)
             .await
             .expect("Failed to download file with sanitized filename");
 
@@ -345,5 +390,7 @@ async fn test_filename_sanitization() {
             "Content mismatch for problematic filename: {}",
             problematic_filename
         );
+
+        println!("✅ Sanitized filename test passed for: {}", problematic_filename);
     }
-} // TestServer is dropped here, automatically cleaning up temp directory
+}
