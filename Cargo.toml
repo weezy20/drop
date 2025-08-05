@@ -3,6 +3,14 @@ name = "drop"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "drop"
+path = "src/lib.rs"
+
+[[bin]]
+name = "drop"
+path = "src/main.rs"
+
 [dependencies]
 axum = { version = "0.8.4", features = ["multipart"] }
 tokio = { version = "1.47.1", features = ["full"] }
