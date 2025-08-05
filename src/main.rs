@@ -1,6 +1,7 @@
 use color_eyre::eyre::{Context, Result};
 use drop::{AppState, Config, create_app, initialize_memory_pool, database::Database};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 use tracing_subscriber;
@@ -61,7 +62,7 @@ async fn main() -> Result<()> {
 
     info!("Server running on http://{}", config.bind_address);
 
-    axum::serve(listener, app)
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
         .await
         .context("Server failed to start")?;
 
