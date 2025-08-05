@@ -1,75 +1,77 @@
 # Drop 💧 - High-Performance File Sharing Service
 
-Fast file sharing with URL shortening, streaming uploads, smart memory management, and production database support.
+A fast, secure file sharing service with URL shortening, streaming uploads, smart memory management, and production database support.
 
-## Features
+## ✨ Features
 
-- **Production Database**: PostgreSQL with Redis caching and automatic fallback
-- **URL Shortening**: 8-character collision-resistant codes
-- **Streaming**: Files >50MB stream to disk, supports up to 10GB
-- **Security**: Filename sanitization, rate limiting, path traversal protection
-- **Smart Memory**: Automatic memory pool with disk fallback
-- **Health Monitoring**: `/health` endpoint with database status
-- **High Availability**: Automatic fallback to in-memory storage when database is down
-- **Configurable**: Environment variables for all settings
+- **🗄️ Production Ready**: PostgreSQL with Redis caching and automatic fallback
+- **🔗 URL Shortening**: 8-character collision-resistant codes with base36 encoding
+- **📡 Streaming Support**: Files >50MB stream to disk, supports up to 10GB uploads
+- **🔒 Security First**: Filename sanitization, rate limiting, path traversal protection
+- **🧠 Smart Memory**: Automatic memory pool management with disk fallback
+- **💚 Health Monitoring**: Real-time `/health` endpoint with database status
+- **⚡ High Availability**: Automatic fallback to in-memory storage when database is down
+- **⚙️ Fully Configurable**: Environment variables for all settings
 
-## Database Setup
+## 🚀 Quick Start
 
-### Quick Start with Docker Compose
+### Docker Compose (Recommended)
 
 ```bash
+# Clone the repository
+git clone <repo-url>
+cd drop
+
 # Start all services (PostgreSQL + Redis + Drop)
 docker-compose up -d
 
 # Check health
 curl http://localhost:3000/health
+
+# Upload a file
+curl -X POST -F "file=@README.md" http://localhost:3000/drop
 ```
 
-### Manual Database Setup
+### Manual Setup
 
 ```bash
-# Copy environment config
+# Copy environment configuration
 cp .env.example .env
 
-# Edit .env with your database credentials
-DATABASE_URL=postgresql://drop_user:drop_password@localhost:5432/drop
-REDIS_URL=redis://localhost:6379
+# Edit .env with your settings
+nano .env
 
-# Start PostgreSQL and Redis
+# Start database services
 docker-compose up -d postgres redis
 
-# Run the application
-cargo run
+# Build and run
+cargo run --release
 ```
 
-The application will automatically:
-- Connect to PostgreSQL for persistent file metadata storage
-- Use Redis for fast in-memory caching (optional)
-- Fall back to in-memory storage if database is unavailable
-- Run database migrations on startup
+## 🔧 Configuration
 
-## Configuration
+All configuration is done via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | `None` | PostgreSQL connection string |
-| `REDIS_URL` | `None` | Redis connection string (optional) |
+| `DATABASE_URL` | None | PostgreSQL connection string |
+| `REDIS_URL` | None | Redis connection string (optional) |
 | `DROP_BIND_ADDRESS` | `0.0.0.0:3000` | Server bind address |
-| `DROP_TEMP_DIR` | `./temp` | Temp file directory |
-| `DROP_MAX_FILE_SIZE_GB` | `5` | Max file size (GB) |
-| `DROP_MAX_TOTAL_SIZE_GB` | `10` | Max total per request (GB) |
-| `DROP_STREAM_THRESHOLD_MB` | `50` | Stream threshold (MB) |
+| `DROP_TEMP_DIR` | `/tmp/drop` | Temporary file directory |
+| `DROP_MAX_FILE_SIZE_GB` | `5` | Maximum single file size (GB) |
+| `DROP_MAX_TOTAL_SIZE_GB` | `10` | Maximum total request size (GB) |
+| `DROP_STREAM_THRESHOLD_MB` | `50` | Memory-to-disk threshold (MB) |
 | `DROP_MEMORY_POOL_RATIO` | `0.5` | Memory pool ratio (0.0-1.0) |
 | `DROP_RATE_LIMIT_RPM` | `60` | Requests per minute per IP |
 
-## API Endpoints
+## 📡 API Reference
 
 ### Health Check
 ```bash
-curl http://localhost:3000/health
+GET /health
 ```
 
-Response:
+**Response:**
 ```json
 {
   "status": "healthy",
@@ -86,28 +88,18 @@ Response:
 }
 ```
 
-## Quick Start
-
+### Upload File
 ```bash
-# Build and run
-cargo run
-
-# With custom config
-DROP_MAX_FILE_SIZE_GB=10 DROP_BIND_ADDRESS=127.0.0.1:8080 cargo run
-
-# Docker
-docker build -t drop .
-docker run -p 3000:3000 drop
+POST /drop
+Content-Type: multipart/form-data
 ```
 
-## API Usage
-
-### Upload
+**Example:**
 ```bash
 curl -X POST -F "file=@example.txt" http://localhost:3000/drop
 ```
 
-Response:
+**Response:**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -116,33 +108,87 @@ Response:
 }
 ```
 
-### Download
+### Download File
 ```bash
-# By short code or full ID
+GET /drop/{id_or_short_code}
+```
+
+**Examples:**
+```bash
+# Download by short code
 curl -O http://localhost:3000/drop/a1b2c3d4
+
+# Download by full UUID
 curl -O http://localhost:3000/drop/550e8400-e29b-41d4-a716-446655440000
 ```
 
-## Production Setup Recommendation
+## 🏗️ Architecture
+
+- **Database Layer**: PostgreSQL for persistent metadata storage with automatic migrations
+- **Caching Layer**: Redis for fast lookups (optional)
+- **Storage Strategy**: Smart memory/disk hybrid based on file size and available memory
+- **Fallback System**: Graceful degradation to in-memory storage when database is unavailable
+- **Health Monitoring**: Real-time status checks for all components
+
+## 🧪 Testing
 
 ```bash
-# Environment variables
+# Run all tests
+cargo test
+
+# Run integration tests (requires Docker services)
+docker-compose up -d
+cargo test --test integration_test
+
+# Manual testing
+echo "Hello, World!" > test.txt
+curl -X POST -F "file=@test.txt" http://localhost:3000/drop
+```
+
+## 🚀 Production Deployment
+
+### Recommended Environment
+```bash
+# Production settings
+export DATABASE_URL="postgresql://user:pass@localhost:5432/drop"
+export REDIS_URL="redis://localhost:6379"
 export DROP_BIND_ADDRESS="0.0.0.0:3000"
 export DROP_MAX_FILE_SIZE_GB="10"
 export DROP_TEMP_DIR="/var/tmp/drop"
 export DROP_RATE_LIMIT_RPM="100"
+export RUST_LOG="info"
 
-# Run
-cargo run --release
+# Build and run
+cargo build --release
+./target/release/drop
 ```
 
-## Testing
-
+### Docker Production
 ```bash
-# Integration tests
-cargo test
+# Build production image
+docker build -t drop:latest .
 
-# Manual test
-echo "test" > test.txt
-curl -X POST -F "file=@test.txt" http://localhost:3000/drop
+# Run with environment file
+docker run --env-file .env -p 3000:3000 drop:latest
 ```
+
+## 📊 Performance Features
+
+- **Memory Pool Management**: Automatic sizing based on system memory
+- **Streaming Uploads**: Large files stream directly to disk
+- **Connection Pooling**: Efficient database connections with SQLx
+- **Rate Limiting**: Per-IP request limiting
+- **Health Checks**: Docker and application-level health monitoring
+- **Graceful Degradation**: Service continues even when database is down
+
+## 🔒 Security Features
+
+- **Filename Sanitization**: Prevents path traversal attacks
+- **Rate Limiting**: Protection against abuse
+- **Input Validation**: Comprehensive request validation
+- **Error Handling**: No sensitive information leaked in errors
+- **User Isolation**: Docker container runs as non-root user
+
+## 📝 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.

@@ -1,2 +1,25 @@
+# Build artifacts
 /target
+
+# Temporary files
+temp/
+*.tmp
+*.log
+*.pid
+
+# Test files
 *.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables (keep .env.example)
+.env

@@ -2,6 +2,12 @@
 name = "drop"
 version = "0.1.0"
 edition = "2024"
+description = "High-performance file sharing service with URL shortening and smart memory management"
+repository = "https://github.com/weezy20/drop"
+license = "MIT"
+keywords = ["file-sharing", "upload", "download", "url-shortener", "streaming"]
+categories = ["web-programming", "network-programming"]
+readme = "README.md"
 
 [lib]
 name = "drop"
